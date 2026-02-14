@@ -1,0 +1,6 @@
+{
+  "name": "neuralwings-server",
+  "version-string": "0.1.0",
+  "description": "NeuralWings authoritative game server (nbnet + WebRTC)",
+  "dependencies": ["libdatachannel", "openssl"]
+}

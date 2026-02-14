@@ -1,0 +1,12 @@
+# Build outputs
+build/
+build_wsl/
+
+third_party/
+
+# vcpkg local files
+vcpkg/
+vcpkg*/
+
+# IDE
+.vscode/
