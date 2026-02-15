@@ -67,6 +67,16 @@ namespace PacketSerializer
         return buf;
     }
 
+    inline std::vector<uint8_t> WriteObjectDespawn(ClientID ownerClientID, NetObjectID objectID)
+    {
+        MsgObjectDespawn msg;
+        msg.ownerClientID = ownerClientID;
+        msg.objectID = objectID;
+        std::vector<uint8_t> buf(sizeof(msg));
+        std::memcpy(buf.data(), &msg, sizeof(msg));
+        return buf;
+    }
+
     // ────────────────────── Readers ──────────────────────
 
     /// Peek at the message type (first byte).

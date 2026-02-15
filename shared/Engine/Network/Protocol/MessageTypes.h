@@ -12,6 +12,7 @@ enum class NetMessageType : uint8_t
     // ── Position sync ───────────────────────
     PositionUpdate = 0x10,    // C→S  client sends own position
     PositionBroadcast = 0x11, // S→C  server broadcasts all positions
+    ObjectDespawn = 0x12,     // S→C  server tells clients to remove an object
 
     // ── Future (reserved) ───────────────────
     // RoomJoin      = 0x20,

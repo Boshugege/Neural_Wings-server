@@ -15,6 +15,7 @@ extern "C"
 }
 
 #include "GameServer.h"
+#include <algorithm>
 
 // ── Constants ──────────────────────────────────────────────────────
 static constexpr const char *NW_PROTOCOL_NAME = "neural_wings";
@@ -113,6 +114,8 @@ void GameServer::Tick()
         }
     }
 
+    RemoveTimedOutClients();
+
     // 2. Broadcast game state
     BroadcastPositions();
 
@@ -137,6 +140,7 @@ void GameServer::HandleNewConnection()
     ClientState state;
     state.id = newID;
     state.connHandle = conn;
+    state.lastSeen = std::chrono::steady_clock::now();
 
     m_clients[newID] = state;
     m_connIndex[conn] = newID;
@@ -230,6 +234,7 @@ void GameServer::HandleClientHello(ClientID clientID,
             cs.id = oldID;
             cs.uuid = uuid;
             cs.welcomed = true;
+            cs.lastSeen = std::chrono::steady_clock::now();
 
             // Re-index: move state from temp clientID to old clientID
             ClientState movedState = cs;
@@ -249,6 +254,7 @@ void GameServer::HandleClientHello(ClientID clientID,
     }
 
     it->second.welcomed = true;
+    it->second.lastSeen = std::chrono::steady_clock::now();
     SendWelcome(clientID);
     std::cout << "[GameServer] Assigned ClientID " << clientID << "\n";
 }
@@ -265,6 +271,7 @@ void GameServer::HandlePositionUpdate(ClientID clientID,
     it->second.objectID = msg.objectID;
     it->second.lastTransform = msg.transform;
     it->second.hasTransform = true;
+    it->second.lastSeen = std::chrono::steady_clock::now();
 }
 
 void GameServer::HandleClientDisconnect(ClientID clientID)
@@ -278,6 +285,14 @@ void GameServer::SendWelcome(ClientID clientID)
 {
     auto pkt = PacketSerializer::WriteServerWelcome(clientID);
     SendTo(clientID, pkt.data(), pkt.size(), 0); // reliable
+}
+
+void GameServer::SendObjectDespawn(ClientID toClientID, ClientID ownerClientID, NetObjectID objectID)
+{
+    if (objectID == INVALID_NET_OBJECT_ID)
+        return;
+    auto pkt = PacketSerializer::WriteObjectDespawn(ownerClientID, objectID);
+    SendTo(toClientID, pkt.data(), pkt.size(), 0); // reliable
 }
 
 void GameServer::SendTo(ClientID clientID,
@@ -300,6 +315,25 @@ void GameServer::RemoveClient(ClientID clientID, const char *reason)
     if (it == m_clients.end())
         return;
 
+    const ClientID removedOwnerID = it->second.id;
+    const NetObjectID removedObjectID = it->second.objectID;
+    const bool shouldNotify = it->second.welcomed && removedObjectID != INVALID_NET_OBJECT_ID;
+
+    if (shouldNotify)
+    {
+        std::vector<ClientID> notifyTargets;
+        notifyTargets.reserve(m_clients.size());
+        for (const auto &[id, cs] : m_clients)
+        {
+            (void)id;
+            if (!cs.welcomed || cs.id == removedOwnerID)
+                continue;
+            notifyTargets.push_back(cs.id);
+        }
+        for (ClientID targetID : notifyTargets)
+            SendObjectDespawn(targetID, removedOwnerID, removedObjectID);
+    }
+
     uint32_t connHandle = it->second.connHandle;
     // Keep UUID mapping alive so returning players are recognised.
     // Only remove connection/state tracking.
@@ -307,6 +341,25 @@ void GameServer::RemoveClient(ClientID clientID, const char *reason)
     m_connIndex.erase(connHandle);
 
     std::cout << "[GameServer] Client " << clientID << " " << reason << "\n";
+}
+
+void GameServer::RemoveTimedOutClients()
+{
+    const auto now = std::chrono::steady_clock::now();
+    std::vector<ClientID> timedOutIDs;
+    timedOutIDs.reserve(m_clients.size());
+
+    for (const auto &[id, cs] : m_clients)
+    {
+        (void)id;
+        if (!cs.welcomed)
+            continue;
+        if ((now - cs.lastSeen) > m_clientTimeout)
+            timedOutIDs.push_back(cs.id);
+    }
+
+    for (ClientID id : timedOutIDs)
+        RemoveClient(id, "timed out");
 }
 
 // ── Broadcast ──────────────────────────────────────────────────────

@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 #include <iostream>
+#include <chrono>
 
 /// Authoritative game server powered by nbnet.
 ///
@@ -42,9 +43,11 @@ private:
     void HandleClientDisconnect(ClientID clientID);
 
     void SendWelcome(ClientID clientID);
+    void SendObjectDespawn(ClientID toClientID, ClientID ownerClientID, NetObjectID objectID);
     void SendTo(ClientID clientID, const uint8_t *data, size_t len, uint8_t channel);
     void RemoveClient(ClientID clientID, const char *reason);
     void BroadcastPositions();
+    void RemoveTimedOutClients();
 
     // ── Data ───────────────────────────────────────────────────────
     bool m_running = false;
@@ -61,6 +64,7 @@ private:
         NetTransformState lastTransform{};
         bool hasTransform = false;
         bool welcomed = false;
+        std::chrono::steady_clock::time_point lastSeen = std::chrono::steady_clock::now();
     };
 
     /// ClientID → state
@@ -71,4 +75,6 @@ private:
 
     /// NetUUID → ClientID   (persistent identity mapping)
     std::unordered_map<NetUUID, ClientID, NetUUIDHash> m_uuidIndex;
+
+    std::chrono::milliseconds m_clientTimeout{5000};
 };
