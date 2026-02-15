@@ -42,9 +42,11 @@ namespace PacketSerializer
     }
 
     inline std::vector<uint8_t> WritePositionBroadcast(
-        const std::vector<NetBroadcastEntry> &entries)
+        const std::vector<NetBroadcastEntry> &entries,
+        uint32_t serverTick)
     {
         MsgPositionBroadcast hdr;
+        hdr.serverTick = serverTick;
         hdr.entryCount = static_cast<uint16_t>(entries.size());
         size_t totalSize = sizeof(hdr) + entries.size() * sizeof(NetBroadcastEntry);
         std::vector<uint8_t> buf(totalSize);
@@ -97,19 +99,33 @@ namespace PacketSerializer
         return msg;
     }
 
+    struct PositionBroadcastData
+    {
+        uint32_t serverTick = 0;
+        std::vector<NetBroadcastEntry> entries;
+    };
+
+    inline PositionBroadcastData ReadPositionBroadcast(
+        const uint8_t *data, size_t len)
+    {
+        auto hdr = Read<MsgPositionBroadcast>(data, len);
+        PositionBroadcastData out{};
+        out.serverTick = hdr.serverTick;
+        out.entries.resize(hdr.entryCount);
+        if (hdr.entryCount > 0)
+        {
+            size_t offset = sizeof(MsgPositionBroadcast);
+            std::memcpy(out.entries.data(), data + offset,
+                        hdr.entryCount * sizeof(NetBroadcastEntry));
+        }
+        return out;
+    }
+
     /// Read the variable-length broadcast entries that follow MsgPositionBroadcast.
     inline std::vector<NetBroadcastEntry> ReadBroadcastEntries(
         const uint8_t *data, size_t len)
     {
-        auto hdr = Read<MsgPositionBroadcast>(data, len);
-        std::vector<NetBroadcastEntry> entries(hdr.entryCount);
-        if (hdr.entryCount > 0)
-        {
-            size_t offset = sizeof(MsgPositionBroadcast);
-            std::memcpy(entries.data(), data + offset,
-                        hdr.entryCount * sizeof(NetBroadcastEntry));
-        }
-        return entries;
+        return ReadPositionBroadcast(data, len).entries;
     }
 
 } // namespace PacketSerializer

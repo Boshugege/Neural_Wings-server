@@ -70,6 +70,7 @@ struct NetBroadcastEntry
 struct MsgPositionBroadcast
 {
     NetPacketHeader header{NetMessageType::PositionBroadcast};
+    uint32_t serverTick = 0;
     uint16_t entryCount = 0;
     // Followed by `entryCount` NetBroadcastEntry structs in the buffer.
 };

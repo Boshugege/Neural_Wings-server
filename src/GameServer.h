@@ -45,7 +45,7 @@ private:
     void SendWelcome(ClientID clientID);
     void SendObjectDespawn(ClientID toClientID, ClientID ownerClientID, NetObjectID objectID);
     void SendTo(ClientID clientID, const uint8_t *data, size_t len, uint8_t channel);
-    void RemoveClient(ClientID clientID, const char *reason);
+    void RemoveClient(ClientID clientID, const char *reason, bool closeTransport = false);
     void BroadcastPositions();
     void RemoveTimedOutClients();
 
@@ -77,4 +77,5 @@ private:
     std::unordered_map<NetUUID, ClientID, NetUUIDHash> m_uuidIndex;
 
     std::chrono::milliseconds m_clientTimeout{5000};
+    uint32_t m_serverTick = 0;
 };

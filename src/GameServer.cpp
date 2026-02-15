@@ -65,6 +65,7 @@ bool GameServer::Start(uint16_t port)
     }
 
     m_running = true;
+    m_serverTick = 0;
     std::cout << "[GameServer] Started on port " << port << "\n";
     return true;
 }
@@ -89,6 +90,7 @@ void GameServer::Tick()
 {
     if (!m_running)
         return;
+    ++m_serverTick;
 
     // 1. Poll all network events
     int ev;
@@ -226,6 +228,21 @@ void GameServer::HandleClientHello(ClientID clientID,
         {
             // Returning player — reuse the old ClientID
             ClientID oldID = uuidIt->second;
+
+            // Security policy: if the same UUID is already online,
+            // reject the later login instead of replacing the active session.
+            if (oldID != clientID)
+            {
+                auto existingIt = m_clients.find(oldID);
+                if (existingIt != m_clients.end() &&
+                    existingIt->second.connHandle != it->second.connHandle)
+                {
+                    std::cout << "[GameServer] Duplicate UUID blocked, keep online ClientID "
+                              << oldID << "\n";
+                    RemoveClient(clientID, "duplicate UUID", true);
+                    return;
+                }
+            }
             std::cout << "[GameServer] Returning player UUID recognised, "
                       << "reusing ClientID " << oldID << "\n";
 
@@ -276,7 +293,7 @@ void GameServer::HandlePositionUpdate(ClientID clientID,
 
 void GameServer::HandleClientDisconnect(ClientID clientID)
 {
-    RemoveClient(clientID, "requested disconnect");
+    RemoveClient(clientID, "requested disconnect", true);
 }
 
 // ── Sending helpers ────────────────────────────────────────────────
@@ -309,7 +326,7 @@ void GameServer::SendTo(ClientID clientID,
         MapChannel(channel));
 }
 
-void GameServer::RemoveClient(ClientID clientID, const char *reason)
+void GameServer::RemoveClient(ClientID clientID, const char *reason, bool closeTransport)
 {
     auto it = m_clients.find(clientID);
     if (it == m_clients.end())
@@ -335,6 +352,15 @@ void GameServer::RemoveClient(ClientID clientID, const char *reason)
     }
 
     uint32_t connHandle = it->second.connHandle;
+
+    if (closeTransport)
+    {
+        if (NBN_GameServer_CloseClient(connHandle) < 0)
+        {
+            std::cerr << "[GameServer] Failed to close transport for client "
+                      << clientID << "\n";
+        }
+    }
     // Keep UUID mapping alive so returning players are recognised.
     // Only remove connection/state tracking.
     m_clients.erase(it);
@@ -359,7 +385,7 @@ void GameServer::RemoveTimedOutClients()
     }
 
     for (ClientID id : timedOutIDs)
-        RemoveClient(id, "timed out");
+        RemoveClient(id, "timed out", true);
 }
 
 // ── Broadcast ──────────────────────────────────────────────────────
@@ -386,7 +412,7 @@ void GameServer::BroadcastPositions()
     if (entries.empty())
         return;
 
-    auto pkt = PacketSerializer::WritePositionBroadcast(entries);
+    auto pkt = PacketSerializer::WritePositionBroadcast(entries, m_serverTick);
 
     for (auto &[id, cs] : m_clients)
     {

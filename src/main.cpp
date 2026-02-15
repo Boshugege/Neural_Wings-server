@@ -58,11 +58,11 @@ int main(int argc, char *argv[])
     std::cout << "[Server] Running on port " << port
               << ". Press Ctrl+C to stop.\n";
 
-    // ── Main tick loop (60 Hz) ─────────────────────────────────────
+    // ── Main tick loop (30 Hz) ─────────────────────────────────────
     using clock = std::chrono::steady_clock;
     constexpr auto TICK_INTERVAL =
         std::chrono::duration_cast<clock::duration>(
-            std::chrono::milliseconds(16)); // ~60 ticks/s
+            std::chrono::milliseconds(33)); // ~30 ticks/s
 
     while (server.IsRunning())
     {
