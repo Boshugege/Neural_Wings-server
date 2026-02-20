@@ -83,4 +83,63 @@ struct MsgObjectDespawn
     NetObjectID objectID = INVALID_NET_OBJECT_ID;
 };
 
+// ── Chat ────────────────────────────────────────────────────────────
+
+/// Chat channel / message type.
+enum class ChatMessageType : uint8_t
+{
+    System = 0,  // server-originated system message
+    Public = 1,  // public (global) chat
+    Whisper = 2, // private message between two players
+};
+
+enum class NicknameUpdateStatus : uint8_t
+{
+    Accepted = 0,
+    Conflict = 1,
+    Invalid = 2,
+};
+
+/// C→S : client requests to send a chat message.
+/// Variable-length: header + fields + textLength + text bytes.
+struct MsgChatRequest
+{
+    NetPacketHeader header{NetMessageType::ChatRequest};
+    ChatMessageType chatType = ChatMessageType::Public;
+    ClientID targetClientID = INVALID_CLIENT_ID; // only meaningful for Whisper
+    uint16_t textLength = 0;
+    // Followed by `textLength` bytes of UTF-8 text in the buffer.
+};
+
+/// S→C : server delivers a chat message to client(s).
+/// Variable-length: header + fields + senderNameLength + senderName + textLength + text.
+struct MsgChatBroadcast
+{
+    NetPacketHeader header{NetMessageType::ChatBroadcast};
+    ChatMessageType chatType = ChatMessageType::Public;
+    ClientID senderClientID = INVALID_CLIENT_ID; // 0 for system messages
+    uint8_t senderNameLength = 0;
+    // Followed by `senderNameLength` bytes of sender display name (UTF-8),
+    // then uint16_t textLength, then `textLength` bytes of UTF-8 text.
+};
+
+/// C→S : client requests nickname update.
+/// Variable-length: header + nicknameLength + nickname bytes.
+struct MsgNicknameUpdateRequest
+{
+    NetPacketHeader header{NetMessageType::NicknameUpdateRequest};
+    uint8_t nicknameLength = 0;
+    // Followed by `nicknameLength` bytes of UTF-8 nickname.
+};
+
+/// S→C : server returns nickname validation result and authoritative nickname.
+/// Variable-length: header + status + nicknameLength + nickname bytes.
+struct MsgNicknameUpdateResult
+{
+    NetPacketHeader header{NetMessageType::NicknameUpdateResult};
+    NicknameUpdateStatus status = NicknameUpdateStatus::Accepted;
+    uint8_t nicknameLength = 0;
+    // Followed by `nicknameLength` bytes of UTF-8 nickname.
+};
+
 #pragma pack(pop)

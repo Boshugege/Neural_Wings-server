@@ -16,6 +16,7 @@ extern "C"
 
 #include "GameServer.h"
 #include <algorithm>
+#include <cctype>
 
 // ── Constants ──────────────────────────────────────────────────────
 static constexpr const char *NW_PROTOCOL_NAME = "neural_wings";
@@ -80,6 +81,7 @@ void GameServer::Stop()
     NBN_GameServer_Stop();
 
     m_connIndex.clear();
+    m_nicknameIndex.clear();
     m_clients.clear();
     std::cout << "[GameServer] Stopped\n";
 }
@@ -200,6 +202,12 @@ void GameServer::DispatchPacket(ClientID clientID,
     case NetMessageType::ClientDisconnect:
         HandleClientDisconnect(clientID);
         break;
+    case NetMessageType::ChatRequest:
+        HandleChatRequest(clientID, data, len);
+        break;
+    case NetMessageType::NicknameUpdateRequest:
+        HandleNicknameUpdateRequest(clientID, data, len);
+        break;
     default:
         std::cerr << "[GameServer] Unknown message type "
                   << static_cast<int>(type) << "\n";
@@ -251,6 +259,8 @@ void GameServer::HandleClientHello(ClientID clientID,
             cs.id = oldID;
             cs.uuid = uuid;
             cs.welcomed = true;
+            if (cs.nickname.empty())
+                cs.nickname = "Player " + std::to_string(oldID);
             cs.lastSeen = std::chrono::steady_clock::now();
 
             // Re-index: move state from temp clientID to old clientID
@@ -258,8 +268,10 @@ void GameServer::HandleClientHello(ClientID clientID,
             m_clients.erase(it);
             m_clients[oldID] = movedState;
             m_connIndex[movedState.connHandle] = oldID;
+            m_nicknameIndex[NormalizeNickname(movedState.nickname)] = oldID;
 
             SendWelcome(oldID);
+            SendNicknameUpdateResult(oldID, NicknameUpdateStatus::Accepted, movedState.nickname);
             return;
         }
 
@@ -271,8 +283,12 @@ void GameServer::HandleClientHello(ClientID clientID,
     }
 
     it->second.welcomed = true;
+    if (it->second.nickname.empty())
+        it->second.nickname = "Player " + std::to_string(clientID);
+    m_nicknameIndex[NormalizeNickname(it->second.nickname)] = clientID;
     it->second.lastSeen = std::chrono::steady_clock::now();
     SendWelcome(clientID);
+    SendNicknameUpdateResult(clientID, NicknameUpdateStatus::Accepted, it->second.nickname);
     std::cout << "[GameServer] Assigned ClientID " << clientID << "\n";
 }
 
@@ -352,6 +368,8 @@ void GameServer::RemoveClient(ClientID clientID, const char *reason, bool closeT
     }
 
     uint32_t connHandle = it->second.connHandle;
+    if (!it->second.nickname.empty())
+        m_nicknameIndex.erase(NormalizeNickname(it->second.nickname));
 
     if (closeTransport)
     {
@@ -371,6 +389,9 @@ void GameServer::RemoveClient(ClientID clientID, const char *reason, bool closeT
 
 void GameServer::RemoveTimedOutClients()
 {
+    if (m_clientTimeout.count() <= 0)
+        return;
+
     const auto now = std::chrono::steady_clock::now();
     std::vector<ClientID> timedOutIDs;
     timedOutIDs.reserve(m_clients.size());
@@ -425,5 +446,206 @@ void GameServer::BroadcastPositions()
             pkt.data(),
             static_cast<unsigned int>(pkt.size()),
             NBN_CHANNEL_RESERVED_UNRELIABLE); // unreliable for position broadcast
+    }
+}
+
+// ── Chat ───────────────────────────────────────────────────────────
+
+static constexpr size_t MAX_CHAT_TEXT_LEN = 256;
+static constexpr size_t MAX_NICKNAME_LEN = 16;
+static constexpr size_t MIN_NICKNAME_LEN = 3;
+static constexpr std::chrono::milliseconds CHAT_RATE_LIMIT{500}; // 0.5 s
+
+std::string GameServer::GetClientDisplayName(ClientID clientID) const
+{
+    auto it = m_clients.find(clientID);
+    if (it == m_clients.end() || it->second.nickname.empty())
+        return "Player " + std::to_string(clientID);
+    return it->second.nickname;
+}
+
+std::string GameServer::NormalizeNickname(const std::string &nickname)
+{
+    std::string out;
+    out.reserve(nickname.size());
+    for (char ch : nickname)
+    {
+        out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+    return out;
+}
+
+bool GameServer::IsValidNickname(const std::string &nickname)
+{
+    if (nickname.size() < MIN_NICKNAME_LEN || nickname.size() > MAX_NICKNAME_LEN)
+        return false;
+    for (char ch : nickname)
+    {
+        unsigned char c = static_cast<unsigned char>(ch);
+        if (std::isalnum(c) || c == '_')
+            continue;
+        return false;
+    }
+    return true;
+}
+
+void GameServer::SendNicknameUpdateResult(ClientID clientID,
+                                          NicknameUpdateStatus status,
+                                          const std::string &nickname)
+{
+    auto pkt = PacketSerializer::WriteNicknameUpdateResult(status, nickname);
+    SendTo(clientID, pkt.data(), pkt.size(), 0);
+}
+
+void GameServer::HandleNicknameUpdateRequest(ClientID clientID,
+                                             const uint8_t *data, size_t len)
+{
+    auto it = m_clients.find(clientID);
+    if (it == m_clients.end() || !it->second.welcomed)
+        return;
+
+    auto req = PacketSerializer::ReadNicknameUpdateRequest(data, len);
+    const std::string requested = req.nickname;
+    const std::string currentNorm = NormalizeNickname(GetClientDisplayName(clientID));
+    const std::string requestedNorm = NormalizeNickname(requested);
+
+    if (requestedNorm == currentNorm)
+    {
+        // Idempotent update: keep quiet, only acknowledge.
+        SendNicknameUpdateResult(clientID, NicknameUpdateStatus::Accepted,
+                                 GetClientDisplayName(clientID));
+        return;
+    }
+
+    if (!IsValidNickname(requested))
+    {
+        SendNicknameUpdateResult(clientID, NicknameUpdateStatus::Invalid,
+                                 GetClientDisplayName(clientID));
+        return;
+    }
+
+    auto existing = m_nicknameIndex.find(requestedNorm);
+    if (existing != m_nicknameIndex.end() && existing->second != clientID)
+    {
+        SendNicknameUpdateResult(clientID, NicknameUpdateStatus::Conflict,
+                                 GetClientDisplayName(clientID));
+        return;
+    }
+
+    if (!it->second.nickname.empty())
+    {
+        m_nicknameIndex.erase(NormalizeNickname(it->second.nickname));
+    }
+    it->second.nickname = requested;
+    m_nicknameIndex[requestedNorm] = clientID;
+
+    SendNicknameUpdateResult(clientID, NicknameUpdateStatus::Accepted, requested);
+    SendSystemMessage("Your nickname is now '" + requested + "'.", clientID);
+}
+
+void GameServer::HandleChatRequest(ClientID clientID,
+                                   const uint8_t *data, size_t len)
+{
+    auto it = m_clients.find(clientID);
+    if (it == m_clients.end() || !it->second.welcomed)
+        return;
+
+    auto req = PacketSerializer::ReadChatRequest(data, len);
+
+    // ── Validation ─────────────────────────────────────────────────
+    // 1. Text length check
+    if (req.text.empty() || req.text.size() > MAX_CHAT_TEXT_LEN)
+    {
+        std::cerr << "[GameServer] Chat rejected from " << clientID
+                  << ": invalid text length (" << req.text.size() << ")\n";
+        return;
+    }
+
+    // 2. Rate limit
+    auto now = std::chrono::steady_clock::now();
+    if ((now - it->second.lastChatTime) < CHAT_RATE_LIMIT)
+    {
+        std::cerr << "[GameServer] Chat rate-limited for " << clientID << "\n";
+        return;
+    }
+    it->second.lastChatTime = now;
+
+    const std::string senderName = GetClientDisplayName(clientID);
+
+    switch (req.chatType)
+    {
+    case ChatMessageType::Public:
+    {
+        std::cout << "[Chat] [Public] " << senderName << ": " << req.text << "\n";
+        BroadcastChat(ChatMessageType::Public, clientID, senderName, req.text);
+        break;
+    }
+    case ChatMessageType::Whisper:
+    {
+        // 3. Target existence check
+        auto targetIt = m_clients.find(req.targetClientID);
+        if (targetIt == m_clients.end() || !targetIt->second.welcomed)
+        {
+            // Notify sender the target doesn't exist
+            SendSystemMessage("Player " + std::to_string(req.targetClientID) +
+                                  " is not online.",
+                              clientID);
+            return;
+        }
+        std::cout << "[Chat] [Whisper] " << senderName << " -> Player "
+                  << req.targetClientID << ": " << req.text << "\n";
+        // Send to target
+        SendChatTo(req.targetClientID, ChatMessageType::Whisper,
+                   clientID, senderName, req.text);
+        // Echo back to sender
+        if (req.targetClientID != clientID)
+        {
+            SendChatTo(clientID, ChatMessageType::Whisper,
+                       clientID, senderName, req.text);
+        }
+        break;
+    }
+    case ChatMessageType::System:
+        // Clients are not allowed to send system messages
+        std::cerr << "[GameServer] Client " << clientID
+                  << " tried to send a system message\n";
+        break;
+    }
+}
+
+void GameServer::BroadcastChat(ChatMessageType chatType, ClientID senderID,
+                               const std::string &senderName, const std::string &text)
+{
+    auto pkt = PacketSerializer::WriteChatBroadcast(chatType, senderID, senderName, text);
+    for (auto &[id, cs] : m_clients)
+    {
+        (void)id;
+        if (!cs.welcomed)
+            continue;
+        SendTo(cs.id, pkt.data(), pkt.size(), 0); // reliable
+    }
+}
+
+void GameServer::SendChatTo(ClientID targetID, ChatMessageType chatType,
+                            ClientID senderID, const std::string &senderName,
+                            const std::string &text)
+{
+    auto pkt = PacketSerializer::WriteChatBroadcast(chatType, senderID, senderName, text);
+    SendTo(targetID, pkt.data(), pkt.size(), 0); // reliable
+}
+
+void GameServer::SendSystemMessage(const std::string &text, ClientID targetID)
+{
+    if (targetID != INVALID_CLIENT_ID)
+    {
+        // Send to specific client
+        auto pkt = PacketSerializer::WriteChatBroadcast(
+            ChatMessageType::System, INVALID_CLIENT_ID, "System", text);
+        SendTo(targetID, pkt.data(), pkt.size(), 0);
+    }
+    else
+    {
+        // Broadcast to all
+        BroadcastChat(ChatMessageType::System, INVALID_CLIENT_ID, "System", text);
     }
 }

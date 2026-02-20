@@ -3,6 +3,7 @@
 #include "Engine/Network/Protocol/PacketSerializer.h"
 
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <iostream>
@@ -41,6 +42,8 @@ private:
     void HandleClientHello(ClientID clientID, const uint8_t *data, size_t len);
     void HandlePositionUpdate(ClientID clientID, const uint8_t *data, size_t len);
     void HandleClientDisconnect(ClientID clientID);
+    void HandleChatRequest(ClientID clientID, const uint8_t *data, size_t len);
+    void HandleNicknameUpdateRequest(ClientID clientID, const uint8_t *data, size_t len);
 
     void SendWelcome(ClientID clientID);
     void SendObjectDespawn(ClientID toClientID, ClientID ownerClientID, NetObjectID objectID);
@@ -48,6 +51,19 @@ private:
     void RemoveClient(ClientID clientID, const char *reason, bool closeTransport = false);
     void BroadcastPositions();
     void RemoveTimedOutClients();
+
+    // ── Chat helpers ────────────────────────────────────────────
+    void BroadcastChat(ChatMessageType chatType, ClientID senderID,
+                       const std::string &senderName, const std::string &text);
+    void SendChatTo(ClientID targetID, ChatMessageType chatType, ClientID senderID,
+                    const std::string &senderName, const std::string &text);
+    /// Send a system message to a specific client or all clients (targetID=0 for all).
+    void SendSystemMessage(const std::string &text, ClientID targetID = INVALID_CLIENT_ID);
+    void SendNicknameUpdateResult(ClientID clientID, NicknameUpdateStatus status,
+                                  const std::string &nickname);
+    std::string GetClientDisplayName(ClientID clientID) const;
+    static std::string NormalizeNickname(const std::string &nickname);
+    static bool IsValidNickname(const std::string &nickname);
 
     // ── Data ───────────────────────────────────────────────────────
     bool m_running = false;
@@ -64,7 +80,9 @@ private:
         NetTransformState lastTransform{};
         bool hasTransform = false;
         bool welcomed = false;
+        std::string nickname;
         std::chrono::steady_clock::time_point lastSeen = std::chrono::steady_clock::now();
+        std::chrono::steady_clock::time_point lastChatTime{}; // rate limit
     };
 
     /// ClientID → state
@@ -75,7 +93,10 @@ private:
 
     /// NetUUID → ClientID   (persistent identity mapping)
     std::unordered_map<NetUUID, ClientID, NetUUIDHash> m_uuidIndex;
+    /// normalized nickname -> ClientID (online only)
+    std::unordered_map<std::string, ClientID> m_nicknameIndex;
 
-    std::chrono::milliseconds m_clientTimeout{5000};
+    // Disable application-level timeout by default. We rely on transport disconnect events.
+    std::chrono::milliseconds m_clientTimeout{0};
     uint32_t m_serverTick = 0;
 };
