@@ -27,6 +27,28 @@ static uint8_t MapChannel(uint8_t ourChannel)
     return (ourChannel == 0) ? NBN_CHANNEL_RESERVED_RELIABLE : NBN_CHANNEL_RESERVED_UNRELIABLE;
 }
 
+static std::string TrimSpaces(const std::string &text)
+{
+    size_t begin = 0;
+    while (begin < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[begin])))
+    {
+        ++begin;
+    }
+
+    if (begin >= text.size())
+        return "";
+
+    size_t end = text.size();
+    while (end > begin &&
+           std::isspace(static_cast<unsigned char>(text[end - 1])))
+    {
+        --end;
+    }
+
+    return text.substr(begin, end - begin);
+}
+
 // ── Lifecycle ──────────────────────────────────────────────────────
 
 GameServer::~GameServer()
@@ -573,11 +595,18 @@ void GameServer::HandleChatRequest(ClientID clientID,
 
     const std::string senderName = GetClientDisplayName(clientID);
 
+    auto setPublicMode = [&]()
+    {
+        it->second.whisperTargetID = INVALID_CLIENT_ID;
+        it->second.whisperTargetNickname.clear();
+    };
+
     auto sendHelp = [this, clientID]()
     {
         SendSystemMessage(
             "Available chat commands:\n"
-            "/w <nickname> <message> - send a private whisper.\n"
+            "/w <nickname> - enter whisper mode (supports spaces in nickname).\n"
+            "/a - return to public chat.\n"
             "/help - show this help message.",
             clientID);
     };
@@ -590,40 +619,35 @@ void GameServer::HandleChatRequest(ClientID clientID,
             return;
         }
 
-        if (req.text.rfind("/w ", 0) == 0)
+        if (req.text.rfind("/a", 0) == 0 &&
+            TrimSpaces(req.text.substr(2)).empty())
         {
-            size_t pos = 3;
-            while (pos < req.text.size() && req.text[pos] == ' ')
-                ++pos;
+            setPublicMode();
+            SendSystemMessage(
+                "[CHAT_MODE:PUBLIC] Switched to public chat.",
+                clientID);
+            return;
+        }
 
-            size_t nicknameStart = pos;
-            while (pos < req.text.size() && req.text[pos] != ' ')
-                ++pos;
+        if (req.text == "/w" || req.text.rfind("/w ", 0) == 0)
+        {
+            const std::string targetNickname = TrimSpaces(req.text.substr(2));
 
-            if (nicknameStart == pos)
+            if (targetNickname.empty())
             {
-                SendSystemMessage("Usage: /w <nickname> <message>", clientID);
+                SendSystemMessage("Usage: /w <nickname>", clientID);
                 return;
             }
 
-            const std::string targetNickname =
-                req.text.substr(nicknameStart, pos - nicknameStart);
-
-            while (pos < req.text.size() && req.text[pos] == ' ')
-                ++pos;
-
-            if (pos >= req.text.size())
-            {
-                SendSystemMessage("Usage: /w <nickname> <message>", clientID);
-                return;
-            }
-
-            const std::string msgText = req.text.substr(pos);
             const std::string targetNorm = NormalizeNickname(targetNickname);
             auto targetIdIt = m_nicknameIndex.find(targetNorm);
             if (targetIdIt == m_nicknameIndex.end())
             {
-                SendSystemMessage("Player '" + targetNickname + "' is not online.", clientID);
+                setPublicMode();
+                SendSystemMessage(
+                    "[CHAT_MODE:PUBLIC] Player '" + targetNickname +
+                        "' is not online. Switched to public chat.",
+                    clientID);
                 return;
             }
 
@@ -631,25 +655,61 @@ void GameServer::HandleChatRequest(ClientID clientID,
             auto targetStateIt = m_clients.find(targetID);
             if (targetStateIt == m_clients.end() || !targetStateIt->second.welcomed)
             {
-                SendSystemMessage("Player '" + targetNickname + "' is not online.", clientID);
+                setPublicMode();
+                SendSystemMessage(
+                    "[CHAT_MODE:PUBLIC] Player '" + targetNickname +
+                        "' is not online. Switched to public chat.",
+                    clientID);
                 return;
             }
 
-            std::cout << "[Chat] [Whisper] " << senderName << " -> "
-                      << targetStateIt->second.nickname << ": " << msgText << "\n";
-
-            SendChatTo(targetID, ChatMessageType::Whisper,
-                       clientID, senderName, msgText);
-
-            if (targetID != clientID)
-            {
-                SendChatTo(clientID, ChatMessageType::Whisper,
-                           clientID, senderName, msgText);
-            }
+            const std::string targetDisplayName = GetClientDisplayName(targetID);
+            it->second.whisperTargetID = targetID;
+            it->second.whisperTargetNickname = targetDisplayName;
+            SendSystemMessage(
+                "[CHAT_MODE:WHISPER:" + targetDisplayName +
+                    "] Whisper mode on for '" + targetDisplayName +
+                    "'. Use /a to return to public chat.",
+                clientID);
             return;
         }
 
         SendSystemMessage("Unknown command. Type /help for commands.", clientID);
+        return;
+    }
+
+    if (it->second.whisperTargetID != INVALID_CLIENT_ID)
+    {
+        const ClientID targetID = it->second.whisperTargetID;
+        auto targetStateIt = m_clients.find(targetID);
+        if (targetStateIt == m_clients.end() || !targetStateIt->second.welcomed)
+        {
+            const std::string offlineName =
+                it->second.whisperTargetNickname.empty()
+                    ? "selected player"
+                    : ("'" + it->second.whisperTargetNickname + "'");
+            setPublicMode();
+            SendSystemMessage(
+                "[CHAT_MODE:PUBLIC] Whisper target " + offlineName +
+                    " is offline. Switched to public chat.",
+                clientID);
+            return;
+        }
+
+        const std::string targetDisplayName = GetClientDisplayName(targetID);
+        it->second.whisperTargetNickname = targetDisplayName;
+
+        std::cout << "[Chat] [Whisper] " << senderName << " -> "
+                  << targetDisplayName << ": " << req.text << "\n";
+
+        SendChatTo(targetID, ChatMessageType::Whisper,
+                   clientID, senderName, req.text);
+
+        if (targetID != clientID)
+        {
+            SendChatTo(clientID, ChatMessageType::Whisper,
+                       clientID, senderName, req.text);
+        }
         return;
     }
 
@@ -663,7 +723,7 @@ void GameServer::HandleChatRequest(ClientID clientID,
     }
     case ChatMessageType::Whisper:
     {
-        SendSystemMessage("Use /w <nickname> <message> for whisper.", clientID);
+        SendSystemMessage("Use /w <nickname> to enter whisper mode.", clientID);
         break;
     }
     case ChatMessageType::System:

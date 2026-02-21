@@ -81,6 +81,8 @@ private:
         bool hasTransform = false;
         bool welcomed = false;
         std::string nickname;
+        ClientID whisperTargetID = INVALID_CLIENT_ID;
+        std::string whisperTargetNickname;
         std::chrono::steady_clock::time_point lastSeen = std::chrono::steady_clock::now();
         std::chrono::steady_clock::time_point lastChatTime{}; // rate limit
     };
