@@ -454,7 +454,7 @@ void GameServer::BroadcastPositions()
 static constexpr size_t MAX_CHAT_TEXT_LEN = 256;
 static constexpr size_t MAX_NICKNAME_LEN = 16;
 static constexpr size_t MIN_NICKNAME_LEN = 3;
-static constexpr std::chrono::milliseconds CHAT_RATE_LIMIT{500}; // 0.5 s
+static constexpr std::chrono::milliseconds CHAT_RATE_LIMIT{300}; // 0.3 s
 
 std::string GameServer::GetClientDisplayName(ClientID clientID) const
 {
@@ -566,11 +566,92 @@ void GameServer::HandleChatRequest(ClientID clientID,
     if ((now - it->second.lastChatTime) < CHAT_RATE_LIMIT)
     {
         std::cerr << "[GameServer] Chat rate-limited for " << clientID << "\n";
+        SendSystemMessage("Message rate-limited. Please slow down.", clientID);
         return;
     }
     it->second.lastChatTime = now;
 
     const std::string senderName = GetClientDisplayName(clientID);
+
+    auto sendHelp = [this, clientID]()
+    {
+        SendSystemMessage(
+            "Available chat commands:\n"
+            "/w <nickname> <message> - send a private whisper.\n"
+            "/help - show this help message.",
+            clientID);
+    };
+
+    if (!req.text.empty() && req.text[0] == '/')
+    {
+        if (req.text == "/help")
+        {
+            sendHelp();
+            return;
+        }
+
+        if (req.text.rfind("/w ", 0) == 0)
+        {
+            size_t pos = 3;
+            while (pos < req.text.size() && req.text[pos] == ' ')
+                ++pos;
+
+            size_t nicknameStart = pos;
+            while (pos < req.text.size() && req.text[pos] != ' ')
+                ++pos;
+
+            if (nicknameStart == pos)
+            {
+                SendSystemMessage("Usage: /w <nickname> <message>", clientID);
+                return;
+            }
+
+            const std::string targetNickname =
+                req.text.substr(nicknameStart, pos - nicknameStart);
+
+            while (pos < req.text.size() && req.text[pos] == ' ')
+                ++pos;
+
+            if (pos >= req.text.size())
+            {
+                SendSystemMessage("Usage: /w <nickname> <message>", clientID);
+                return;
+            }
+
+            const std::string msgText = req.text.substr(pos);
+            const std::string targetNorm = NormalizeNickname(targetNickname);
+            auto targetIdIt = m_nicknameIndex.find(targetNorm);
+            if (targetIdIt == m_nicknameIndex.end())
+            {
+                SendSystemMessage("Player '" + targetNickname + "' is not online.", clientID);
+                return;
+            }
+
+            const ClientID targetID = targetIdIt->second;
+            auto targetStateIt = m_clients.find(targetID);
+            if (targetStateIt == m_clients.end() || !targetStateIt->second.welcomed)
+            {
+                SendSystemMessage("Player '" + targetNickname + "' is not online.", clientID);
+                return;
+            }
+
+            std::cout << "[Chat] [Whisper] " << senderName << " -> "
+                      << targetStateIt->second.nickname << ": " << msgText << "\n";
+
+            SendChatTo(targetID, ChatMessageType::Whisper,
+                       clientID, senderName, msgText);
+
+            if (targetID != clientID)
+            {
+                SendChatTo(clientID, ChatMessageType::Whisper,
+                           clientID, senderName, msgText);
+            }
+            return;
+        }
+
+        SendSystemMessage("Unknown command. Type /help for commands.", clientID);
+        return;
+    }
 
     switch (req.chatType)
     {
@@ -582,27 +663,7 @@ void GameServer::HandleChatRequest(ClientID clientID,
     }
     case ChatMessageType::Whisper:
     {
-        // 3. Target existence check
-        auto targetIt = m_clients.find(req.targetClientID);
-        if (targetIt == m_clients.end() || !targetIt->second.welcomed)
-        {
-            // Notify sender the target doesn't exist
-            SendSystemMessage("Player " + std::to_string(req.targetClientID) +
-                                  " is not online.",
-                              clientID);
-            return;
-        }
-        std::cout << "[Chat] [Whisper] " << senderName << " -> Player "
-                  << req.targetClientID << ": " << req.text << "\n";
-        // Send to target
-        SendChatTo(req.targetClientID, ChatMessageType::Whisper,
-                   clientID, senderName, req.text);
-        // Echo back to sender
-        if (req.targetClientID != clientID)
-        {
-            SendChatTo(clientID, ChatMessageType::Whisper,
-                       clientID, senderName, req.text);
-        }
+        SendSystemMessage("Use /w <nickname> <message> for whisper.", clientID);
         break;
     }
     case ChatMessageType::System:
