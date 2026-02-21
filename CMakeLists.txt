@@ -14,7 +14,10 @@ endif()
 # ── Sources ──────────────────────────────────────────────────────
 set(SERVER_SOURCES
     src/main.cpp
-    src/GameServer.cpp
+    src/Lifecycle.cpp
+    src/Connection.cpp
+    src/StateSync.cpp
+    src/Chat.cpp
     src/nbnet_server_impl.c
 )
 
