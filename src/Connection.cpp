@@ -156,6 +156,8 @@ void GameServer::HandleClientHello(ClientID clientID,
 
             SendWelcome(oldID);
             SendNicknameUpdateResult(oldID, NicknameUpdateStatus::Accepted, movedState.nickname);
+            SendPlayerMetaSnapshot(oldID);
+            BroadcastPlayerMetaUpsert(oldID, movedState.nickname, false);
             return;
         }
 
@@ -173,6 +175,8 @@ void GameServer::HandleClientHello(ClientID clientID,
     it->second.lastSeen = std::chrono::steady_clock::now();
     SendWelcome(clientID);
     SendNicknameUpdateResult(clientID, NicknameUpdateStatus::Accepted, it->second.nickname);
+    SendPlayerMetaSnapshot(clientID);
+    BroadcastPlayerMetaUpsert(clientID, it->second.nickname, false);
     std::cout << "[GameServer] Assigned ClientID " << clientID << "\n";
 }
 

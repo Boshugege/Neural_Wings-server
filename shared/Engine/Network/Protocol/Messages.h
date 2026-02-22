@@ -160,4 +160,38 @@ struct MsgNicknameUpdateResult
     // Followed by `nicknameLength` bytes of UTF-8 nickname.
 };
 
+/// One compact metadata entry header used inside PlayerMetaSnapshot payload.
+/// Variable-length: header + nickname bytes.
+struct MsgPlayerMetaEntry
+{
+    ClientID clientID = INVALID_CLIENT_ID;
+    uint8_t nicknameLength = 0;
+    // Followed by `nicknameLength` bytes of UTF-8 nickname.
+};
+
+/// S→C : full player metadata snapshot.
+/// Variable-length: header + entryCount + repeated entry(header+nicknameBytes).
+struct MsgPlayerMetaSnapshot
+{
+    NetPacketHeader header{NetMessageType::PlayerMetaSnapshot};
+    uint16_t entryCount = 0;
+};
+
+/// S→C : insert/update one player's metadata.
+/// Variable-length: header + clientID + nicknameLength + nickname bytes.
+struct MsgPlayerMetaUpsert
+{
+    NetPacketHeader header{NetMessageType::PlayerMetaUpsert};
+    ClientID clientID = INVALID_CLIENT_ID;
+    uint8_t nicknameLength = 0;
+    // Followed by `nicknameLength` bytes of UTF-8 nickname.
+};
+
+/// S→C : remove one player's metadata.
+struct MsgPlayerMetaRemove
+{
+    NetPacketHeader header{NetMessageType::PlayerMetaRemove};
+    ClientID clientID = INVALID_CLIENT_ID;
+};
+
 #pragma pack(pop)

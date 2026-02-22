@@ -49,6 +49,10 @@ private:
 
     void SendWelcome(ClientID clientID);
     void SendObjectDespawn(ClientID toClientID, ClientID ownerClientID, NetObjectID objectID);
+    void SendPlayerMetaSnapshot(ClientID clientID);
+    void BroadcastPlayerMetaUpsert(ClientID subjectClientID, const std::string &nickname,
+                                   bool includeSubject = true);
+    void BroadcastPlayerMetaRemove(ClientID removedClientID);
     void SendTo(ClientID clientID, const uint8_t *data, size_t len, uint8_t channel);
     void RemoveClient(ClientID clientID, const char *reason, bool closeTransport = false);
     void BroadcastPositions();

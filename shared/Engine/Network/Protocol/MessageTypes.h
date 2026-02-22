@@ -21,6 +21,9 @@ enum class NetMessageType : uint8_t
     ChatBroadcast = 0x41,         // S→C  server delivers a chat message
     NicknameUpdateRequest = 0x42, // C→S client requests nickname change
     NicknameUpdateResult = 0x43,  // S→C server returns nickname check result
+    PlayerMetaSnapshot = 0x44,    // S→C full online player metadata snapshot
+    PlayerMetaUpsert = 0x45,      // S→C insert/update one player's metadata
+    PlayerMetaRemove = 0x46,      // S→C remove one player's metadata
 
     // ── Future (reserved) ───────────────────
     // RoomJoin      = 0x20,

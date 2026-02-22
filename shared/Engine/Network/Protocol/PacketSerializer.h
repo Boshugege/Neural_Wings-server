@@ -2,9 +2,11 @@
 #include "Engine/Network/Protocol/Messages.h"
 #include <vector>
 #include <string>
+#include <cstdint>
 #include <cstring>
 #include <cassert>
 #include <algorithm>
+#include <utility>
 
 /// Header-only helpers for packing / unpacking network messages.
 /// Keeps serialization in one place so client & server stay in sync.
@@ -295,6 +297,78 @@ namespace PacketSerializer
         return buf;
     }
 
+    struct PlayerMetaEntryData
+    {
+        ClientID clientID = INVALID_CLIENT_ID;
+        std::string nickname;
+    };
+
+    inline std::vector<uint8_t> WritePlayerMetaSnapshot(
+        const std::vector<PlayerMetaEntryData> &entries)
+    {
+        MsgPlayerMetaSnapshot hdr;
+        hdr.entryCount = static_cast<uint16_t>(
+            std::min(entries.size(), static_cast<size_t>(UINT16_MAX)));
+
+        size_t totalSize = sizeof(MsgPlayerMetaSnapshot);
+        for (size_t i = 0; i < hdr.entryCount; ++i)
+        {
+            const auto &entry = entries[i];
+            const uint8_t len8 = static_cast<uint8_t>(
+                std::min(entry.nickname.size(), static_cast<size_t>(255)));
+            totalSize += sizeof(MsgPlayerMetaEntry) + len8;
+        }
+
+        std::vector<uint8_t> buf(totalSize);
+        std::memcpy(buf.data(), &hdr, sizeof(hdr));
+
+        size_t offset = sizeof(MsgPlayerMetaSnapshot);
+        for (size_t i = 0; i < hdr.entryCount; ++i)
+        {
+            const auto &entry = entries[i];
+            MsgPlayerMetaEntry ehdr;
+            ehdr.clientID = entry.clientID;
+            ehdr.nicknameLength = static_cast<uint8_t>(
+                std::min(entry.nickname.size(), static_cast<size_t>(255)));
+
+            std::memcpy(buf.data() + offset, &ehdr, sizeof(ehdr));
+            offset += sizeof(ehdr);
+
+            if (ehdr.nicknameLength > 0)
+            {
+                std::memcpy(buf.data() + offset, entry.nickname.data(), ehdr.nicknameLength);
+                offset += ehdr.nicknameLength;
+            }
+        }
+        return buf;
+    }
+
+    inline std::vector<uint8_t> WritePlayerMetaUpsert(ClientID clientID,
+                                                       const std::string &nickname)
+    {
+        const uint8_t len8 = static_cast<uint8_t>(
+            std::min(nickname.size(), static_cast<size_t>(255)));
+        const size_t totalSize = sizeof(MsgPlayerMetaUpsert) + len8;
+        std::vector<uint8_t> buf(totalSize);
+
+        MsgPlayerMetaUpsert hdr;
+        hdr.clientID = clientID;
+        hdr.nicknameLength = len8;
+        std::memcpy(buf.data(), &hdr, sizeof(hdr));
+        if (len8 > 0)
+            std::memcpy(buf.data() + sizeof(hdr), nickname.data(), len8);
+        return buf;
+    }
+
+    inline std::vector<uint8_t> WritePlayerMetaRemove(ClientID clientID)
+    {
+        MsgPlayerMetaRemove msg;
+        msg.clientID = clientID;
+        std::vector<uint8_t> buf(sizeof(msg));
+        std::memcpy(buf.data(), &msg, sizeof(msg));
+        return buf;
+    }
+
     // ────────────────────── Nickname Readers ──────────────────────
 
     struct NicknameUpdateRequestData
@@ -341,6 +415,69 @@ namespace PacketSerializer
                 hdr.nicknameLength);
         }
         return out;
+    }
+
+    struct PlayerMetaSnapshotData
+    {
+        std::vector<PlayerMetaEntryData> entries;
+    };
+
+    inline PlayerMetaSnapshotData ReadPlayerMetaSnapshot(
+        const uint8_t *data, size_t len)
+    {
+        auto hdr = Read<MsgPlayerMetaSnapshot>(data, len);
+        PlayerMetaSnapshotData out;
+        out.entries.reserve(hdr.entryCount);
+
+        size_t offset = sizeof(MsgPlayerMetaSnapshot);
+        for (uint16_t i = 0; i < hdr.entryCount; ++i)
+        {
+            if (offset + sizeof(MsgPlayerMetaEntry) > len)
+                break;
+
+            MsgPlayerMetaEntry ehdr{};
+            std::memcpy(&ehdr, data + offset, sizeof(ehdr));
+            offset += sizeof(ehdr);
+
+            if (offset + ehdr.nicknameLength > len)
+                break;
+
+            PlayerMetaEntryData entry;
+            entry.clientID = ehdr.clientID;
+            if (ehdr.nicknameLength > 0)
+            {
+                entry.nickname.assign(
+                    reinterpret_cast<const char *>(data + offset),
+                    ehdr.nicknameLength);
+            }
+            offset += ehdr.nicknameLength;
+            out.entries.push_back(std::move(entry));
+        }
+        return out;
+    }
+
+    inline PlayerMetaEntryData ReadPlayerMetaUpsert(
+        const uint8_t *data, size_t len)
+    {
+        auto hdr = Read<MsgPlayerMetaUpsert>(data, len);
+        PlayerMetaEntryData out;
+        out.clientID = hdr.clientID;
+
+        size_t offset = sizeof(MsgPlayerMetaUpsert);
+        if (hdr.nicknameLength > 0 && offset + hdr.nicknameLength <= len)
+        {
+            out.nickname.assign(
+                reinterpret_cast<const char *>(data + offset),
+                hdr.nicknameLength);
+        }
+        return out;
+    }
+
+    inline ClientID ReadPlayerMetaRemove(
+        const uint8_t *data, size_t len)
+    {
+        auto msg = Read<MsgPlayerMetaRemove>(data, len);
+        return msg.clientID;
     }
 
 } // namespace PacketSerializer

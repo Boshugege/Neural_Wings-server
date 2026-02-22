@@ -8,6 +8,7 @@ extern "C"
 }
 
 #include "GameServer.h"
+#include <utility>
 
 static uint8_t MapChannel(uint8_t ourChannel)
 {
@@ -27,6 +28,55 @@ void GameServer::SendObjectDespawn(ClientID toClientID, ClientID ownerClientID, 
         return;
     auto pkt = PacketSerializer::WriteObjectDespawn(ownerClientID, objectID);
     SendTo(toClientID, pkt.data(), pkt.size(), 0); // reliable
+}
+
+void GameServer::SendPlayerMetaSnapshot(ClientID clientID)
+{
+    std::vector<PacketSerializer::PlayerMetaEntryData> entries;
+    entries.reserve(m_clients.size());
+
+    for (const auto &[id, cs] : m_clients)
+    {
+        (void)id;
+        if (!cs.welcomed)
+            continue;
+
+        PacketSerializer::PlayerMetaEntryData entry;
+        entry.clientID = cs.id;
+        entry.nickname = GetClientDisplayName(cs.id);
+        entries.push_back(std::move(entry));
+    }
+
+    auto pkt = PacketSerializer::WritePlayerMetaSnapshot(entries);
+    SendTo(clientID, pkt.data(), pkt.size(), 0); // reliable
+}
+
+void GameServer::BroadcastPlayerMetaUpsert(ClientID subjectClientID,
+                                           const std::string &nickname,
+                                           bool includeSubject)
+{
+    auto pkt = PacketSerializer::WritePlayerMetaUpsert(subjectClientID, nickname);
+    for (const auto &[id, cs] : m_clients)
+    {
+        (void)id;
+        if (!cs.welcomed)
+            continue;
+        if (!includeSubject && cs.id == subjectClientID)
+            continue;
+        SendTo(cs.id, pkt.data(), pkt.size(), 0); // reliable
+    }
+}
+
+void GameServer::BroadcastPlayerMetaRemove(ClientID removedClientID)
+{
+    auto pkt = PacketSerializer::WritePlayerMetaRemove(removedClientID);
+    for (const auto &[id, cs] : m_clients)
+    {
+        (void)id;
+        if (!cs.welcomed || cs.id == removedClientID)
+            continue;
+        SendTo(cs.id, pkt.data(), pkt.size(), 0); // reliable
+    }
 }
 
 void GameServer::SendTo(ClientID clientID,
@@ -49,6 +99,7 @@ void GameServer::RemoveClient(ClientID clientID, const char *reason, bool closeT
     if (it == m_clients.end())
         return;
 
+    const bool wasWelcomed = it->second.welcomed;
     const ClientID removedOwnerID = it->second.id;
     const NetObjectID removedObjectID = it->second.objectID;
     const bool shouldNotify = it->second.welcomed && removedObjectID != INVALID_NET_OBJECT_ID;
@@ -66,6 +117,11 @@ void GameServer::RemoveClient(ClientID clientID, const char *reason, bool closeT
         }
         for (ClientID targetID : notifyTargets)
             SendObjectDespawn(targetID, removedOwnerID, removedObjectID);
+    }
+
+    if (wasWelcomed)
+    {
+        BroadcastPlayerMetaRemove(removedOwnerID);
     }
 
     uint32_t connHandle = it->second.connHandle;

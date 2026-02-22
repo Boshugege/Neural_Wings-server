@@ -117,6 +117,7 @@ void GameServer::HandleNicknameUpdateRequest(ClientID clientID,
     m_nicknameIndex[requestedNorm] = clientID;
 
     SendNicknameUpdateResult(clientID, NicknameUpdateStatus::Accepted, requested);
+    BroadcastPlayerMetaUpsert(clientID, requested);
     SendSystemMessage("Your nickname is now '" + requested + "'.", clientID);
 }
 
