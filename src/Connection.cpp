@@ -9,6 +9,12 @@ extern "C"
 
 #include "GameServer.h"
 
+namespace
+{
+    // Guard window after ObjectRelease to absorb late unreliable position packets.
+    constexpr std::chrono::milliseconds kReleaseFenceDuration{350};
+}
+
 void GameServer::HandleNewConnection()
 {
     NBN_ConnectionHandle conn = NBN_GameServer_GetIncomingConnection();
@@ -188,11 +194,20 @@ void GameServer::HandlePositionUpdate(ClientID clientID,
     auto it = m_clients.find(clientID);
     if (it == m_clients.end())
         return;
+    if (!it->second.welcomed)
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now < it->second.releaseFenceUntil)
+    {
+        // Ignore late unreliable updates that race with ObjectRelease.
+        return;
+    }
 
     it->second.objectID = msg.objectID;
     it->second.lastTransform = msg.transform;
     it->second.hasTransform = true;
-    it->second.lastSeen = std::chrono::steady_clock::now();
+    it->second.lastSeen = now;
 }
 
 void GameServer::HandleObjectRelease(ClientID clientID,
@@ -203,14 +218,15 @@ void GameServer::HandleObjectRelease(ClientID clientID,
     auto it = m_clients.find(clientID);
     if (it == m_clients.end())
         return;
-
-    const NetObjectID releasedObjectID = msg.objectID;
-
-    // Only act if this client actually owns this object
-    if (it->second.objectID != releasedObjectID)
+    if (!it->second.welcomed)
         return;
 
-    // Broadcast ObjectDespawn to all other welcomed clients
+    const NetObjectID releasedObjectID = msg.objectID;
+    if (releasedObjectID == INVALID_NET_OBJECT_ID)
+        return;
+
+    // ObjectRelease is authoritative for gameplay exit:
+    // always broadcast despawn for the released object id.
     for (const auto &[id, cs] : m_clients)
     {
         (void)id;
@@ -219,11 +235,13 @@ void GameServer::HandleObjectRelease(ClientID clientID,
         SendObjectDespawn(cs.id, clientID, releasedObjectID);
     }
 
-    // Clear the object state but keep the client connected
+    // Clear object state but keep the connection alive for menu/options chat.
     it->second.objectID = INVALID_NET_OBJECT_ID;
     it->second.hasTransform = false;
     it->second.lastTransform = {};
-    it->second.lastSeen = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    it->second.lastSeen = now;
+    it->second.releaseFenceUntil = now + kReleaseFenceDuration;
 
     std::cout << "[GameServer] Client " << clientID
               << " released object " << releasedObjectID << "\n";

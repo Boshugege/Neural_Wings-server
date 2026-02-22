@@ -89,6 +89,8 @@ private:
         std::string nickname;
         ClientID whisperTargetID = INVALID_CLIENT_ID;
         std::string whisperTargetNickname;
+        // ObjectRelease arrived; ignore late unreliable PositionUpdate briefly.
+        std::chrono::steady_clock::time_point releaseFenceUntil{};
         std::chrono::steady_clock::time_point lastSeen = std::chrono::steady_clock::now();
         std::chrono::steady_clock::time_point lastChatTime{}; // rate limit
     };
