@@ -41,6 +41,8 @@ private:
     void DispatchPacket(ClientID clientID, const uint8_t *data, size_t len);
     void HandleClientHello(ClientID clientID, const uint8_t *data, size_t len);
     void HandlePositionUpdate(ClientID clientID, const uint8_t *data, size_t len);
+    void HandleObjectRelease(ClientID clientID, const uint8_t *data, size_t len);
+    void HandleHeartbeat(ClientID clientID, const uint8_t *data, size_t len);
     void HandleClientDisconnect(ClientID clientID);
     void HandleChatRequest(ClientID clientID, const uint8_t *data, size_t len);
     void HandleNicknameUpdateRequest(ClientID clientID, const uint8_t *data, size_t len);
@@ -98,7 +100,7 @@ private:
     /// normalized nickname -> ClientID (online only)
     std::unordered_map<std::string, ClientID> m_nicknameIndex;
 
-    // Disable application-level timeout by default. We rely on transport disconnect events.
-    std::chrono::milliseconds m_clientTimeout{0};
+    // Application-level timeout for stale clients / objects.
+    std::chrono::milliseconds m_clientTimeout{5000}; // 5s
     uint32_t m_serverTick = 0;
 };

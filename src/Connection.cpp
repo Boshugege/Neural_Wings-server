@@ -65,6 +65,11 @@ void GameServer::DispatchPacket(ClientID clientID,
     if (len < sizeof(NetPacketHeader))
         return;
 
+    // Treat any valid packet from a known client as keep-alive.
+    auto itClient = m_clients.find(clientID);
+    if (itClient != m_clients.end())
+        itClient->second.lastSeen = std::chrono::steady_clock::now();
+
     NetMessageType type = PacketSerializer::PeekType(data, len);
     switch (type)
     {
@@ -73,6 +78,12 @@ void GameServer::DispatchPacket(ClientID clientID,
         break;
     case NetMessageType::PositionUpdate:
         HandlePositionUpdate(clientID, data, len);
+        break;
+    case NetMessageType::ObjectRelease:
+        HandleObjectRelease(clientID, data, len);
+        break;
+    case NetMessageType::Heartbeat:
+        HandleHeartbeat(clientID, data, len);
         break;
     case NetMessageType::ClientDisconnect:
         HandleClientDisconnect(clientID);
@@ -178,6 +189,56 @@ void GameServer::HandlePositionUpdate(ClientID clientID,
     it->second.lastTransform = msg.transform;
     it->second.hasTransform = true;
     it->second.lastSeen = std::chrono::steady_clock::now();
+}
+
+void GameServer::HandleObjectRelease(ClientID clientID,
+                                     const uint8_t *data, size_t len)
+{
+    auto msg = PacketSerializer::Read<MsgObjectRelease>(data, len);
+
+    auto it = m_clients.find(clientID);
+    if (it == m_clients.end())
+        return;
+
+    const NetObjectID releasedObjectID = msg.objectID;
+
+    // Only act if this client actually owns this object
+    if (it->second.objectID != releasedObjectID)
+        return;
+
+    // Broadcast ObjectDespawn to all other welcomed clients
+    for (const auto &[id, cs] : m_clients)
+    {
+        (void)id;
+        if (!cs.welcomed || cs.id == clientID)
+            continue;
+        SendObjectDespawn(cs.id, clientID, releasedObjectID);
+    }
+
+    // Clear the object state but keep the client connected
+    it->second.objectID = INVALID_NET_OBJECT_ID;
+    it->second.hasTransform = false;
+    it->second.lastTransform = {};
+    it->second.lastSeen = std::chrono::steady_clock::now();
+
+    std::cout << "[GameServer] Client " << clientID
+              << " released object " << releasedObjectID << "\n";
+}
+
+void GameServer::HandleHeartbeat(ClientID clientID,
+                                 const uint8_t *data, size_t len)
+{
+    auto msg = PacketSerializer::Read<MsgHeartbeat>(data, len);
+    if (msg.clientID != INVALID_CLIENT_ID && msg.clientID != clientID)
+    {
+        std::cerr << "[GameServer] Heartbeat client id mismatch, conn="
+                  << clientID << " payload=" << msg.clientID << "\n";
+        return;
+    }
+
+    auto it = m_clients.find(clientID);
+    if (it != m_clients.end())
+        it->second.lastSeen = std::chrono::steady_clock::now();
 }
 
 void GameServer::HandleClientDisconnect(ClientID clientID)

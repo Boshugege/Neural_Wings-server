@@ -71,6 +71,25 @@ namespace PacketSerializer
         return buf;
     }
 
+    inline std::vector<uint8_t> WriteHeartbeat(ClientID cid)
+    {
+        MsgHeartbeat msg;
+        msg.clientID = cid;
+        std::vector<uint8_t> buf(sizeof(msg));
+        std::memcpy(buf.data(), &msg, sizeof(msg));
+        return buf;
+    }
+
+    inline std::vector<uint8_t> WriteObjectRelease(ClientID cid, NetObjectID oid)
+    {
+        MsgObjectRelease msg;
+        msg.clientID = cid;
+        msg.objectID = oid;
+        std::vector<uint8_t> buf(sizeof(msg));
+        std::memcpy(buf.data(), &msg, sizeof(msg));
+        return buf;
+    }
+
     inline std::vector<uint8_t> WriteObjectDespawn(ClientID ownerClientID, NetObjectID objectID)
     {
         MsgObjectDespawn msg;

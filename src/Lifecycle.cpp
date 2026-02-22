@@ -53,7 +53,8 @@ bool GameServer::Start(uint16_t port)
 
     m_running = true;
     m_serverTick = 0;
-    std::cout << "[GameServer] Started on port " << port << "\n";
+    std::cout << "[GameServer] Started on port " << port
+              << " (client timeout " << m_clientTimeout.count() << " ms)\n";
     return true;
 }
 

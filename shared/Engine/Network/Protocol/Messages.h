@@ -39,13 +39,22 @@ struct MsgClientDisconnect
     ClientID clientID = INVALID_CLIENT_ID;
 };
 
-// ── Position sync ───────────────────────────────────────────────────
+/// C→S : keep the connection alive while idle in non-gameplay screens.
+struct MsgHeartbeat
+{
+    NetPacketHeader header{NetMessageType::Heartbeat};
+    ClientID clientID = INVALID_CLIENT_ID;
+};
 
-/// Compact transform state for one object.
+// ── Flight state sync ────────────────────────────────────────────────
+
+/// Compact flight state for one object (transform + velocity).
 struct NetTransformState
 {
     float posX, posY, posZ;
-    float rotW, rotX, rotY, rotZ; // quaternion
+    float rotW, rotX, rotY, rotZ;    // quaternion
+    float linVelX, linVelY, linVelZ; // linear velocity
+    float angVelX, angVelY, angVelZ; // angular velocity
 };
 
 /// C→S : client reports its own position.
@@ -80,6 +89,15 @@ struct MsgObjectDespawn
 {
     NetPacketHeader header{NetMessageType::ObjectDespawn};
     ClientID ownerClientID = INVALID_CLIENT_ID;
+    NetObjectID objectID = INVALID_NET_OBJECT_ID;
+};
+
+/// C→S : client releases an object but stays connected.
+/// Server will broadcast ObjectDespawn to other clients and clear the object state.
+struct MsgObjectRelease
+{
+    NetPacketHeader header{NetMessageType::ObjectRelease};
+    ClientID clientID = INVALID_CLIENT_ID;
     NetObjectID objectID = INVALID_NET_OBJECT_ID;
 };
 

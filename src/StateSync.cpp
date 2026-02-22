@@ -100,8 +100,6 @@ void GameServer::RemoveTimedOutClients()
     for (const auto &[id, cs] : m_clients)
     {
         (void)id;
-        if (!cs.welcomed)
-            continue;
         if ((now - cs.lastSeen) > m_clientTimeout)
             timedOutIDs.push_back(cs.id);
     }
