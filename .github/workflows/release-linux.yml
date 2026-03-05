@@ -1,0 +1,80 @@
+name: Build & Release (Linux)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build git \
+            pkg-config curl zip unzip tar
+
+      - name: Bootstrap vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git vcpkg --depth=1
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg/installed
+            vcpkg/packages
+            vcpkg/buildtrees
+            vcpkg/downloads
+          key: vcpkg-linux-x64-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-linux-x64-
+
+      - name: Install vcpkg dependencies
+        run: ./vcpkg/vcpkg install --triplet x64-linux
+
+      - name: Download third-party snapshot
+        run: |
+          curl -L -o third_party-snapshot.zip \
+            "https://github.com/Rain-Kotsuzui/Neural_Wings-demo/releases/download/deps-third-party-20260305/third_party-snapshot.zip"
+
+      - name: Extract nbnet from snapshot
+        run: |
+          unzip -q third_party-snapshot.zip -d _snapshot
+          # Use nbnet-2.0 as third_party/nbnet
+          mkdir -p third_party
+          cp -r _snapshot/nbnet-2.0 third_party/nbnet
+          rm -rf _snapshot third_party-snapshot.zip
+          # Verify nbnet.h exists
+          test -f third_party/nbnet/nbnet.h || { echo "ERROR: nbnet.h not found"; exit 1; }
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -G Ninja
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Package artifact
+        run: |
+          mkdir -p release
+          cp build/Neural_Wings-server release/
+          cd release
+          tar czf ../Neural_Wings-server-linux-x64.tar.gz Neural_Wings-server
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Neural_Wings-server-linux-x64.tar.gz
+          generate_release_notes: true
